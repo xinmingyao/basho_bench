@@ -30,7 +30,8 @@
           pb_pid,
           http_host,
           http_port,
-          bucket
+          bucket,
+          max_key
          }).
 
 
@@ -52,6 +53,7 @@ new(Id) ->
     HTTPHosts = basho_bench_config:get(http_hosts, ["127.0.0.1"]),
     HTTPPort =  basho_bench_config:get(http_port, 8098),
     Bucket  = basho_bench_config:get(riakc_pb_bucket, <<"mybucket">>),
+    MaxKey = basho_bench_config:get(max_key, 0),
 
     PBIP = choose(Id, PBIPs),
     case riakc_pb_socket:start_link(PBIP, PBPort) of
@@ -60,7 +62,8 @@ new(Id) ->
                pb_pid = Pid,
                http_host = choose(Id, HTTPHosts),
                http_port = HTTPPort,
-               bucket = Bucket }};
+               bucket = Bucket,
+               max_key = MaxKey}};
         {error, Reason2} ->
             ?FAIL_MSG("Failed to connect riakc_pb_socket to ~p port ~p: ~p\n",
                       [PBIP, PBPort, Reason2])
@@ -166,8 +169,9 @@ run({query_mr, N}, KeyGen, _ValueGen, State) ->
     Port = State#state.http_port,
     Bucket = State#state.bucket,
     StartKey = to_integer(KeyGen()),
-    EndKey = StartKey + N - 1,
+    EndKey = min(State#state.max_key, StartKey + N - 1),
     URL = io_lib:format("http://~s:~p/mapred", [Host, Port]),
+    Expected = EndKey - StartKey + 1,
     Body = ["
       {
          \"inputs\":{
@@ -189,7 +193,7 @@ run({query_mr, N}, KeyGen, _ValueGen, State) ->
       }
     "],
     case json_post(URL, Body) of
-        {ok, Results} when length(Results) == N ->
+        {ok, Results} when length(Results) == Expected ->
             {ok, State};
         {ok, Results} ->
             io:format("Not enough results for query_mr: ~p/~p/~p~n", [StartKey, EndKey, Results]),
@@ -338,6 +342,7 @@ json_post(Url, Payload) ->
                                 post, lists:flatten(Payload)),
     case Response of
         {ok, "200", _, Body} ->
+            %% io:format("body: ~p~n", [Body]),
             {ok, mochijson2:decode(Body)};
         Other ->
             {error, Other}
